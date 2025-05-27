@@ -5,7 +5,7 @@ import sys
 from yaspin import yaspin
 
 from doc_comments_ai import llm, utils
-from doc_comments_ai.llm import GptModel
+from doc_comments_ai.llm import GptModel, extract_doc_comment, insert_doc_comment
 from doc_comments_ai.treesitter import Treesitter, TreesitterMethodNode
 
 
@@ -140,24 +140,25 @@ def run():
                 programming_language.value, method_source_code, args.inline
             )
 
-            # 打印 LLM 原始输出，便于测试和调试
             print("\n--- LLM Raw Output Start ---")
             print(documented_method_source_code)
             print("--- LLM Raw Output End ---\n")
 
-            generated_doc_comments[
-                method_source_code
-            ] = utils.extract_content_from_markdown_code_block(
-                documented_method_source_code
-            )
+            # 后处理：提取注释内容并拼接
+            doc_comment = extract_doc_comment(documented_method_source_code)
+            if not doc_comment.strip().startswith("/**"):
+                print(f"Warning: Output for {method_name} is not a standard doc comment.")
+
+            merged_code = insert_doc_comment(method_source_code, doc_comment)
+
+            generated_doc_comments[method_source_code] = merged_code
 
             spinner.stop()
-
             print(f"✅ Doc comment for {method_name} generated.")
 
     file.close()
 
-    for original_code, generated_doc_comment in generated_doc_comments.items():
+    for original_code, merged_code in generated_doc_comments.items():
         utils.write_code_snippet_to_file(
-            file_name, original_code, generated_doc_comment
+            file_name, original_code, merged_code
         )

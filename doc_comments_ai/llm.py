@@ -221,7 +221,8 @@ class DeepseekLLM:
             "Add a detailed doc comment to the following {language} method:\n{code}\n"
             "The doc comment should describe what the method does. "
             "{inline_comments} "
-            "Return the method implementaion with the doc comment as a single markdown code block. "
+            "Only output the doc comment for the following {language} method, wrapped with /** ... */. \n"
+            "Do not output the method code or any explanation.\n"
             "Don't include any explanations {haskell_missing_signature}in your response."
         ).format(
             language=input["language"],
@@ -259,8 +260,9 @@ class DeepseekLLM:
         for line in lines:
             if line.startswith("data: "):
                 content = line[len("data: "):]
-                # 跳过空行和特殊控制消息
-                if content.strip() and content.strip() not in ["[DONE]", "[newline]", "[h_newline]"]:
+                if content.strip() == "[h_newline]":
+                    content_lines.append("\n")
+                elif content.strip() and content.strip() not in ["[DONE]", "[newline]"]:
                     content_lines.append(content)
         merged = "".join(content_lines) if content_lines else response.text
 
@@ -293,3 +295,36 @@ class DeepseekLLM:
         # 去除开头多余空白
         code = code.lstrip()
         return f"```{lang}\n{code}\n```"
+
+
+def extract_doc_comment(text):
+    # 提取所有 /** ... */ 注释，返回最后一个
+    matches = list(re.finditer(r"/\*\*[\s\S]*?\*/", text))
+    if matches:
+        return matches[-1].group(0)
+    else:
+        print("Warning: DeepSeek output is not a standard doc comment. Attempting to extract...")
+        # 尝试截取最后一个 /** 开始到最近的 */ 结束
+        start = text.rfind("/**")
+        end = text.find("*/", start)
+        if start != -1 and end != -1:
+            return text[start:end+2]
+        # fallback: 返回全部
+        return text
+
+def insert_doc_comment(method_code, doc_comment):
+    # 获取方法体的缩进
+    lines = method_code.splitlines()
+    for line in lines:
+        if line.strip():  # 找到第一个非空行
+            indent = re.match(r"\s*", line).group(0)
+            break
+    else:
+        indent = ""
+    # 给注释每一行加缩进
+    doc_comment_indented = "\n".join(
+        indent + line if line.strip() else line
+        for line in doc_comment.splitlines()
+    )
+    # 插入到方法前
+    return doc_comment_indented + "\n" + method_code
