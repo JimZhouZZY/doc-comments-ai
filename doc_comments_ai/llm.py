@@ -51,7 +51,7 @@ class LLM:
                 num_ctx=max_tokens,
             )
         elif model == "sustech-deepseek":
-            self.llm = DeepseekLLM(api_key="61a60218408332449485a97419e88184d327ac58a8a38a3698082c48a1fc370a")
+            self.llm = DeepseekLLM(api_key="YOUR_API_KEY_HERE")
             self.is_deepseek = True
         else:
             self.llm = ChatLiteLLM(
