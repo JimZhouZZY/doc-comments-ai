@@ -58,6 +58,11 @@ def run():
         default="http://localhost:11434",
         help="Ollama base url",
     )
+    parser.add_argument(
+        "--sustech-deepseek",
+        action="store_true",
+        help="Use the sustech-deepseek LLM.",
+    )
 
     if sys.argv.__len__() < 2:
         sys.exit("Please provide a file")
@@ -83,6 +88,8 @@ def run():
         llm_wrapper = llm.LLM(model=GptModel.GPT_35_16K)
     elif args.ollama_model:
         llm_wrapper = llm.LLM(ollama=(args.ollama_base_url, args.ollama_model))
+    elif args.sustech_deepseek:
+        llm_wrapper = llm.LLM(model="sustech-deepseek")
     else:
         llm_wrapper = llm.LLM(local_model=args.local_model)
 
@@ -132,6 +139,11 @@ def run():
             documented_method_source_code = llm_wrapper.generate_doc_comment(
                 programming_language.value, method_source_code, args.inline
             )
+
+            # 打印 LLM 原始输出，便于测试和调试
+            print("\n--- LLM Raw Output Start ---")
+            print(documented_method_source_code)
+            print("--- LLM Raw Output End ---\n")
 
             generated_doc_comments[
                 method_source_code

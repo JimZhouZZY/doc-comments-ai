@@ -1,9 +1,11 @@
 import os
+import re
 import subprocess
 import sys
 from enum import Enum
 
 import inquirer
+import requests
 from langchain.chains import LLMChain
 from langchain.chat_models import ChatLiteLLM
 from langchain.llms import LlamaCpp, Ollama
@@ -29,7 +31,6 @@ class LLM:
         max_tokens = 2048 if model == GptModel.GPT_35 else 4096
         if local_model is not None:
             self.install_llama_cpp()
-
             self.llm = LlamaCpp(
                 model_path=local_model,
                 temperature=0.8,
@@ -49,10 +50,15 @@ class LLM:
                 temperature=0.8,
                 num_ctx=max_tokens,
             )
+        elif model == "sustech-deepseek":
+            self.llm = DeepseekLLM(api_key="61a60218408332449485a97419e88184d327ac58a8a38a3698082c48a1fc370a")
+            self.is_deepseek = True
         else:
             self.llm = ChatLiteLLM(
                 temperature=0.8, max_tokens=max_tokens, model=model.value
             )
+            self.is_deepseek = False
+
         self.template = (
             "Add a detailed doc comment to the following {language} method:\n{code}\n"
             "The doc comment should describe what the method does. "
@@ -60,22 +66,22 @@ class LLM:
             "Return the method implementaion with the doc comment as a single markdown code block. "
             "Don't include any explanations {haskell_missing_signature}in your response."
         )
-        self.prompt = PromptTemplate(
-            template=self.template,
-            input_variables=[
-                "language",
-                "code",
-                "inline_comments",
-                "Haskell_missing_signature",
-            ],
-        )
-        self.chain = LLMChain(llm=self.llm, prompt=self.prompt)
+        if not getattr(self, "is_deepseek", False):
+            self.prompt = PromptTemplate(
+                template=self.template,
+                input_variables=[
+                    "language",
+                    "code",
+                    "inline_comments",
+                    "Haskell_missing_signature",
+                ],
+            )
+            self.chain = LLMChain(llm=self.llm, prompt=self.prompt)
 
     def generate_doc_comment(self, language, code, inline=False):
         """
         Generates a doc comment for the given method
         """
-
         if inline:
             inline_comments = (
                 "Add inline comments to the method body where it makes sense."
@@ -95,9 +101,11 @@ class LLM:
             "haskell_missing_signature": haskell_missing_signature,
         }
 
-        documented_code = self.chain.run(input)
-
-        return documented_code
+        if getattr(self, "is_deepseek", False):
+            return self.llm.run(input)
+        else:
+            documented_code = self.chain.run(input)
+            return documented_code
 
     def install_llama_cpp(self):
         try:
@@ -197,3 +205,91 @@ class LLM:
             else:
                 print("", "Installation cancelled. Exiting.", "")
                 return None
+
+
+class DeepseekLLM:
+    """
+    A wrapper for the DeepSeek LLM API to generate doc comments.
+    """
+    def __init__(self, api_key: str, endpoint: str = "http://172.18.36.55:5001/api/v1/chat/completions"):
+        self.api_key = api_key
+        self.endpoint = endpoint
+
+    def run(self, input):
+        import sys
+        prompt = (
+            "Add a detailed doc comment to the following {language} method:\n{code}\n"
+            "The doc comment should describe what the method does. "
+            "{inline_comments} "
+            "Return the method implementaion with the doc comment as a single markdown code block. "
+            "Don't include any explanations {haskell_missing_signature}in your response."
+        ).format(
+            language=input["language"],
+            code=input["code"],
+            inline_comments=input["inline_comments"],
+            haskell_missing_signature=input["haskell_missing_signature"],
+        )
+        payload = {
+            "model": "deepseek-r1-standard",
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.8,
+            "stream": False
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
+        print(">>> Sending request to Deepseek with headers:", headers)
+        sys.stdout.flush()
+        try:
+            response = requests.post(self.endpoint, json=payload, headers=headers, timeout=120)
+            print("Deepseek raw response:", response.text)
+            sys.stdout.flush()
+            response.raise_for_status()
+        except Exception as e:
+            print(f"Deepseek request failed: {e}")
+            return ""
+
+        # 处理 SSE 格式，提取 data: 后的内容
+        lines = response.text.splitlines()
+        content_lines = []
+        for line in lines:
+            if line.startswith("data: "):
+                content = line[len("data: "):]
+                # 跳过空行和特殊控制消息
+                if content.strip() and content.strip() not in ["[DONE]", "[newline]", "[h_newline]"]:
+                    content_lines.append(content)
+        merged = "".join(content_lines) if content_lines else response.text
+
+        # 只提取 markdown 代码块
+        code_block = self._extract_code_block(merged)
+        return code_block if code_block else merged
+
+    @staticmethod
+    def _extract_code_block(text):
+        # 匹配 ```java ... ``` 或 ```...```
+        match = re.search(r"```(\w+)?\n?([\s\S]+?)```", text)
+        if match:
+            lang = match.group(1) or "java"
+            code = match.group(2)
+        else:
+            # 兼容没有 ``` 包裹但有类似 java/**... 的情况
+            match2 = re.match(r"(\w+)\s*(/[*]{2}[\s\S]+)", text)
+            if match2:
+                lang = match2.group(1)
+                code = match2.group(2)
+            else:
+                # fallback
+                lang = "java"
+                code = text
+
+        # 替换 [h_newline] 为换行
+        code = code.replace("[h_newline]", "\n")
+        # 去除多余的 data: 前缀
+        code = re.sub(r"^data:\s*", "", code, flags=re.MULTILINE)
+        # 去除开头多余空白
+        code = code.lstrip()
+        return f"```{lang}\n{code}\n```"
